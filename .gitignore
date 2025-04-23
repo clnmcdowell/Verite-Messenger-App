@@ -1,0 +1,29 @@
+# macOS system files
+.DS_Store
+
+# Node modules
+node_modules/
+
+# SvelteKit build output
+.svelte-kit/
+build/
+
+# Output packaging folders
+dist/
+package/
+
+# Environment files (keep example only)
+.env
+.env.*
+!.env.example
+
+# Vite timestamp files (for dev hot reload)
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+
+# Tauri build artifacts
+/src-tauri/target/
+src-tauri/Cargo.lock
+
+# VSCode settings (optional)
+.vscode/
