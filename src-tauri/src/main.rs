@@ -1,17 +1,14 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-#[tauri::command]
-fn init_listener(port: u16) -> Result<(), String> {
-    // Spawn `python chat_service.py listener 5001`
-    std::process::Command::new("python")
-        .arg("src/chat_service.py")
-        .arg("listen")
-        .arg(port.to_string())
-        .spawn()
-        .map_err(|e| format!("failed to launch listener: {}", e))?;
-    Ok(())
-}
+use std::{
+    io::{BufRead, BufReader},
+    process::{Command, Stdio},
+    thread,
+};
+
+// Bring Manager for app.get_webview_window() and Emitter for window.emit()
+use tauri::{Manager, Emitter, WebviewWindow};
 
 #[tauri::command]
 fn start_chat(
@@ -20,7 +17,7 @@ fn start_chat(
     my_id: String,
 ) -> Result<u32, String> {
     // Shell out to Python to call `start_chat(...)`, capture its socket ID
-    let output = std::process::Command::new("python")
+    let output = Command::new("python")
         .arg("src/chat_service.py")
         .arg("start")
         .arg(peer_ip)
@@ -29,7 +26,10 @@ fn start_chat(
         .output()
         .map_err(|e| format!("failed to start chat: {}", e))?;
     if !output.status.success() {
-        return Err(format!("chat_service error: {}", String::from_utf8_lossy(&output.stderr)));
+        return Err(format!(
+            "chat_service error: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
     }
     // Python prints the socket ID on stdout
     let sid: u32 = String::from_utf8_lossy(&output.stdout)
@@ -42,7 +42,7 @@ fn start_chat(
 #[tauri::command]
 fn send_message(socket_id: u32, text: String) -> Result<(), String> {
     // Shell out to send a message
-    let status = std::process::Command::new("python")
+    let status = Command::new("python")
         .arg("src/chat_service.py")
         .arg("send")
         .arg(socket_id.to_string())
@@ -55,10 +55,48 @@ fn send_message(socket_id: u32, text: String) -> Result<(), String> {
     Ok(())
 }
 
+// Spawn the Python listener and pipe its stdout into Tauri events
+fn spawn_python_listener(window: WebviewWindow, port: u16) {
+    thread::spawn(move || {
+        // Launch python in “listen” mode, stdout piped
+        let mut child = Command::new("python")
+            .arg("src/chat_service.py")
+            .arg("listen")
+            .arg(port.to_string())
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("failed to launch chat_service listener");
+
+        let stdout = child.stdout.take().expect("no stdout");
+        let reader = BufReader::new(stdout);
+
+        // Each line is expected as "socket_id:message text"
+        for line in reader.lines() {
+            if let Ok(raw) = line {
+                if let Some((sid_str, text)) = raw.split_once(':') {
+                    if let Ok(sid) = sid_str.parse::<u32>() {
+                        // NEW: Emit the inbound chat-message event to the frontend
+                        window
+                            .emit("chat-message", serde_json::json!({ "sid": sid, "text": text }))
+                            .expect("failed to emit event");
+                    }
+                }
+            }
+        }
+    });
+}
+
 fn main() {
     tauri::Builder::default()
+        .setup(|app| {
+            // once the app is ready, spawn the Python listener on port 5001
+            let window = app
+                .get_webview_window("main")
+                .expect("main window not found");
+            spawn_python_listener(window, 5001);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
-            init_listener,
             start_chat,
             send_message
         ])
