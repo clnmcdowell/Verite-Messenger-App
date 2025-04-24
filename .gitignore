@@ -27,3 +27,14 @@ src-tauri/Cargo.lock
 
 # VSCode settings (optional)
 .vscode/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# SQLite database
+peers.db
+
+# Python virtual environments
+venv/
+.venv/
