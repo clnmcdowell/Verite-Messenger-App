@@ -4,22 +4,14 @@
   "version": "0.1.0",
   "identifier": "com.verite-messenger.app",
   "build": {
-    "beforeDevCommand": "npm run dev",
-    "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeDevCommand": "npm run web",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "npm run build:web",
     "frontendDist": "../build"
   },
   "app": {
-    "windows": [
-      {
-        "title": "verite-messenger",
-        "width": 800,
-        "height": 600
-      }
-    ],
-    "security": {
-      "csp": null
-    }
+    "windows": [{ "title": "verite-messenger", "width": 800, "height": 600 }],
+    "security": { "csp": null }
   },
   "bundle": {
     "active": true,
