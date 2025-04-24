@@ -4,7 +4,13 @@
     import MessageInput from '../components/MessageInput.svelte';
     import type { Peer, Message } from '../components/types';
     import { fetchPeers } from '../lib/api';
+    import { registerPeer, sendHeartbeat } from '../lib/api';
     import { onMount } from 'svelte';
+    import { onDestroy } from 'svelte';
+
+    // TODO: replace with real config
+    const PEER_ID = 'peer1';
+    const LISTEN_PORT = 5001;
 
     // Currently selected peer (null = no selection)
     let selectedPeer: Peer | null = null
@@ -40,22 +46,39 @@
 
     /** Function to load list of peers */
     async function loadPeers() {
-        peers = await fetchPeers();
+        try {
+            peers = await fetchPeers();
+        } catch (err) {
+            console.error('[loadPeers]', err);
+        }
     }
 
-    // Load peers when component mounts
-    onMount(() => {
-        loadPeers().catch(err => {
-            console.error("Failed to load peers:", err);
+    onMount(async () => {
+        // Register this peer with the server
+        try {
+            await registerPeer(PEER_ID, LISTEN_PORT);
+            console.log('[registerPeer] success');
+        } catch (err) {
+            console.error('[registerPeer]', err);
+        }
+
+        // Load the list of peers
+        await loadPeers();
+
+        // Start sending heartbeat to server every 5 seconds
+        const interval = setInterval(async () => {
+            try {
+                await sendHeartbeat(PEER_ID);
+            } catch (err) {
+                console.error('[sendHeartbeat]', err);
+            }
+        }, 5000);
+    
+        // Cleanup interval on component destroy
+        onDestroy(() => {
+            clearInterval(interval);
         });
     });
-
-    // Load peers on an interval (every 5 seconds)
-    const interval = setInterval(() => {
-        loadPeers().catch(err => {
-            console.error("Failed to load peers:", err);
-        });
-    }, 5000);
 </script>
 
 <main class="app">
