@@ -4,148 +4,135 @@
     import MessageInput from '../components/MessageInput.svelte';
     import type { Peer, Message } from '../components/types';
     import { fetchPeers, registerPeer, sendHeartbeat } from '../lib/api';
-    import { onMount, onDestroy } from 'svelte';
+    import { onDestroy } from 'svelte';
     import { listen } from '@tauri-apps/api/event';
     import { invoke } from '@tauri-apps/api/core';
-    
-    // TODO: replace with real config
-    const PEER_ID = 'peer1';
-    const LISTEN_PORT = 5001;
 
     // Reactive state
+    let peerId = '';
+    let listenPort: number | null = null;
+    let connected = false;
+
     let peers: Peer[] = [];
     let selectedPeer: Peer | null = null;
     let messages: Message[] = [];
-
-    // Holds the active socket ID returned by `start_chat`
     let socketId: number | null = null;
+    let heartbeatInterval: ReturnType<typeof setInterval>;
+    let unlisten: () => void;
 
-    /** Fetch & reload the peer list from the discovery server */
     async function loadPeers() {
         try {
-            peers = await fetchPeers();
+        peers = await fetchPeers();
         } catch (err) {
-            console.error('[loadPeers]', err);
+        console.error('[loadPeers]', err);
         }
     }
 
-    /**
-     * Called when user clicks a peer.
-     * 1. Selects them
-     * 2. Clears old messages
-     * 3. Invokes `start_chat` to negotiate and open a socket
-     */
-    async function selectPeer(peer: Peer) {
-        selectedPeer = peer;
-        messages = [];
-
+    async function connect() {
+        if (!peerId || !listenPort) return;
+        // start Python listener on chosen port
         try {
-            socketId = await invoke<number>('start_chat', {
-                peerIp: peer.ip,
-                peerPort: peer.port,
-                myId: PEER_ID,
-            });
-            console.log('[start_chat] got socketId', socketId);
+        await invoke('init_listener', { port: listenPort });
         } catch (err) {
-            console.error('[start_chat]', err);
-        }
-    }
-
-    /** 
-     * Called when user sends a message 
-     * Appends it locally and then invokes the backend to send over TCP.
-     * */
-async function handleSend(content: string) {
-        if (socketId === null) return;
-
-        // Locally append it
-        const outgoing: Message = {
-            from: 'me',
-            to: selectedPeer!.id,
-            content,
-            timestamp: new Date().toISOString()
-        };
-        messages = [...messages, outgoing];
-
-        // Send it across the socket
-        try {
-            await invoke('send_message', { socketId, text: content });
-        } catch (err) {
-            console.error('[send_message]', err);
-        }
-    }
-
-    /** Called when user clicks the attach file button */
-    function handleSendFile() {
-        // TODO: integrate real file picker and backend call
-        alert("File send not implemented yet.")
-    }
-
-  onMount(async () => {
-        // Tell Python to start listening on our port
-        try {
-            await invoke('init_listener', { port: LISTEN_PORT });
-            console.log('[init_listener] listening on', LISTEN_PORT);
-        } catch (err) {
-            console.error('[init_listener]', err);
+        console.error('[init_listener]', err);
+        return;
         }
 
-        // Register & load peers
+        // register with discovery server
         try {
-            await registerPeer(PEER_ID, LISTEN_PORT);
-            console.log('[registerPeer] success');
+        await registerPeer(peerId, listenPort);
         } catch (err) {
-            console.error('[registerPeer]', err);
+        console.error('[registerPeer]', err);
+        return;
         }
+
         await loadPeers();
 
-        // Heartbeat + refresh loop
-        const interval = setInterval(async () => {
+        // start heartbeat + refresh
+        heartbeatInterval = setInterval(async () => {
         try {
-            await sendHeartbeat(PEER_ID);
+            await sendHeartbeat(peerId);
             await loadPeers();
         } catch (err) {
             console.error('[heartbeat/loadPeers]', err);
         }
         }, 5000);
 
-        // Listen for incoming chat‐messages from Python
-        const unlisten = await listen<{ sid: number; text: string }>(
-            'chat-message',
-            event => {
-                const { sid, text } = event.payload;
-                // Only append if it's from the active chat
-                if (sid === socketId) {
-                    messages = [
-                        ...messages,
-                        {
-                            from: selectedPeer!.id,
-                            to: PEER_ID,
-                            content: text,
-                            timestamp: new Date().toISOString()
-                        }
-                    ];
-                }
+        // listen for inbound messages
+        unlisten = await listen<{ sid: number; text: string }>(
+        'chat-message',
+        event => {
+            const { sid, text } = event.payload;
+            if (sid === socketId) {
+            messages = [
+                ...messages,
+                { from: selectedPeer!.id, to: peerId, content: text, timestamp: new Date().toISOString() }
+            ];
             }
+        }
         );
 
-        // Cleanup on unmount
-        onDestroy(() => {
-            clearInterval(interval);
-            unlisten(); // stop listening for chat-message events
+        connected = true;
+    }
+
+    async function selectPeer(peer: Peer) {
+        selectedPeer = peer;
+        messages = [];
+        try {
+        socketId = await invoke<number>('start_chat', {
+            peerIp: peer.ip,
+            peerPort: peer.port,
+            myId: peerId,
         });
+        } catch (err) {
+        console.error('[start_chat]', err);
+        }
+    }
+
+    async function handleSend(content: string) {
+        if (socketId === null) return;
+        const outgoing: Message = { from: 'me', to: selectedPeer!.id, content, timestamp: new Date().toISOString() };
+        messages = [...messages, outgoing];
+        try {
+        await invoke('send_message', { socketId, text: content });
+        } catch (err) {
+        console.error('[send_message]', err);
+        }
+    }
+
+    function handleSendFile() {
+        alert('File send not implemented yet.');
+    }
+
+    onDestroy(() => {
+        clearInterval(heartbeatInterval);
+        unlisten?.();
     });
 </script>
 
 <main class="app">
-    <!-- Sidebar of peers -->
-    <PeerList {peers} onSelect={selectPeer} />
+    {#if !connected}
+        <div class="connect-form">
+        <input placeholder="Your peer ID" bind:value={peerId} />
+        <input
+            type="number"
+            placeholder="Listen port"
+            bind:value={listenPort}
+        />
+        <button on:click={connect} disabled={!peerId || !listenPort}>
+            Connect
+        </button>
+        </div>
+    {:else}
+        <!-- Sidebar of peers -->
+        <PeerList {peers} onSelect={selectPeer} />
 
-    <!-- Chat + input section -->
-    <div class="chat-section">
+        <!-- Chat + input section -->
+        <div class="chat-section">
         <ChatWindow {messages} />
         <MessageInput onSend={handleSend} onSendFile={handleSendFile} />
-    </div>
+        </div>
+    {/if}
 </main>
 
 <style>
@@ -154,6 +141,20 @@ async function handleSend(content: string) {
         height: 100vh;
         font-family: sans-serif;
     }
+
+    .connect-form {
+        margin: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+
+    .connect-form input,
+    .connect-form button {
+        padding: 0.5rem;
+        font-size: 1rem;
+    }
+
     .chat-section {
         flex: 1;
         display: flex;

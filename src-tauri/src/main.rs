@@ -6,10 +6,9 @@ use std::{
     process::{Command, Stdio},
     thread,
 };
-
-// Bring Manager for app.get_webview_window() and Emitter for window.emit()
 use tauri::{Manager, Emitter, WebviewWindow};
 
+// Tauri command to start chat
 #[tauri::command]
 fn start_chat(
     peer_ip: String,
@@ -39,9 +38,9 @@ fn start_chat(
     Ok(sid)
 }
 
+// Tauri command to send message
 #[tauri::command]
 fn send_message(socket_id: u32, text: String) -> Result<(), String> {
-    // Shell out to send a message
     let status = Command::new("python")
         .arg("src/chat_service.py")
         .arg("send")
@@ -55,10 +54,15 @@ fn send_message(socket_id: u32, text: String) -> Result<(), String> {
     Ok(())
 }
 
-// Spawn the Python listener and pipe its stdout into Tauri events
+// Tauri command to initialize listener on custom port
+#[tauri::command]
+fn init_listener(window: WebviewWindow, port: u16) {
+    spawn_python_listener(window, port);
+}
+
+// Spawn the Python listener and pipe stdout into events
 fn spawn_python_listener(window: WebviewWindow, port: u16) {
     thread::spawn(move || {
-        // Launch python in “listen” mode, stdout piped
         let mut child = Command::new("python")
             .arg("src/chat_service.py")
             .arg("listen")
@@ -70,12 +74,10 @@ fn spawn_python_listener(window: WebviewWindow, port: u16) {
         let stdout = child.stdout.take().expect("no stdout");
         let reader = BufReader::new(stdout);
 
-        // Each line is expected as "socket_id:message text"
         for line in reader.lines() {
             if let Ok(raw) = line {
                 if let Some((sid_str, text)) = raw.split_once(':') {
                     if let Ok(sid) = sid_str.parse::<u32>() {
-                        // NEW: Emit the inbound chat-message event to the frontend
                         window
                             .emit("chat-message", serde_json::json!({ "sid": sid, "text": text }))
                             .expect("failed to emit event");
@@ -88,15 +90,8 @@ fn spawn_python_listener(window: WebviewWindow, port: u16) {
 
 fn main() {
     tauri::Builder::default()
-        .setup(|app| {
-            // once the app is ready, spawn the Python listener on port 5001
-            let window = app
-                .get_webview_window("main")
-                .expect("main window not found");
-            spawn_python_listener(window, 5001);
-            Ok(())
-        })
         .invoke_handler(tauri::generate_handler![
+            init_listener,
             start_chat,
             send_message
         ])
