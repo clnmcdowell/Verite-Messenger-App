@@ -3,15 +3,13 @@
     import ChatWindow from '../components/ChatWindow.svelte';
     import MessageInput from '../components/MessageInput.svelte';
     import type { Peer, Message } from '../components/types';
+    import { fetchPeers } from '../lib/api';
+    import { onMount } from 'svelte';
 
     // Currently selected peer (null = no selection)
     let selectedPeer: Peer | null = null
 
-    // Dummy peer list for initial UI
-    let peers: Peer[] = [
-        { id: 'peer1', ip: '192.168.1.2', port: 5001 },
-        { id: 'peer2', ip: '192.168.1.3', port: 5002 }
-    ]
+    let peers: Peer[] = [];
 
     // Chat history; new messages get appended here
     let messages: Message[] = []
@@ -39,6 +37,25 @@
         // TODO: integrate real file picker and backend call
         alert("File send not implemented yet.")
     }
+
+    /** Function to load list of peers */
+    async function loadPeers() {
+        peers = await fetchPeers();
+    }
+
+    // Load peers when component mounts
+    onMount(() => {
+        loadPeers().catch(err => {
+            console.error("Failed to load peers:", err);
+        });
+    });
+
+    // Load peers on an interval (every 5 seconds)
+    const interval = setInterval(() => {
+        loadPeers().catch(err => {
+            console.error("Failed to load peers:", err);
+        });
+    }, 5000);
 </script>
 
 <main class="app">
